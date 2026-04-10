@@ -16,7 +16,7 @@ import { AiService } from './modules/ai/ai.service';
     }),
     RedisModule.forRoot({
       type: 'single',
-      url: 'redis://:wanderix_redis@localhost:6379',
+      url: 'process.env.REDIS_URL || 'redis://:wanderix_redis@localhost:6379'',
     }),
     AuthModule,
   ],
