@@ -5,3 +5,69 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model Hotel {
+  id            String    @id @default(uuid())
+  destinationId String?   @map("destination_id")
+  partnerId     String?   @map("partner_id")
+  name          Json
+  description   Json?
+  amenities     Json?
+  address       Json?
+  stars         Int?
+  category      String?
+  email         String?
+  phone         String?
+  website       String?
+  latitude      Decimal?  @db.Decimal(9, 6)
+  longitude     Decimal?  @db.Decimal(9, 6)
+  pricePerNight Decimal   @map("price_per_night") @db.Decimal(10, 2)
+  currency      String    @default("USD")
+  coverImageUrl String?   @map("cover_image_url")
+  images        String[]
+  rating        Decimal   @default(0) @db.Decimal(3, 2)
+  reviewCount   Int       @default(0) @map("review_count")
+  isActive      Boolean   @default(true)  @map("is_active")
+  isVerified    Boolean   @default(false) @map("is_verified")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt      @map("updated_at")
+  bookings      Booking[]
+  reviews       Review[]
+  @@map("hotels")
+}
+
+model Booking {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  hotelId     String?   @map("hotel_id")
+  status      String    @default("pending")
+  checkIn     DateTime? @map("check_in")
+  checkOut    DateTime? @map("check_out")
+  baseAmount  Decimal   @map("base_amount") @db.Decimal(10, 2)
+  totalAmount Decimal   @map("total_amount") @db.Decimal(10, 2)
+  currency    String    @default("USD")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt      @map("updated_at")
+  hotel       Hotel?    @relation(fields: [hotelId], references: [id])
+  reviews     Review[]
+  @@map("bookings")
+}
+
+model Review {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  bookingId   String?   @unique @map("booking_id")
+  hotelId     String?   @map("hotel_id")
+  comment     Json?
+  rating      Int
+  cleanliness Int?
+  service     Int?
+  location    Int?
+  value       Int?
+  isVerified  Boolean   @default(false) @map("is_verified")
+  isPublished Boolean   @default(true)  @map("is_published")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  hotel       Hotel?    @relation(fields: [hotelId], references: [id])
+  booking     Booking?  @relation(fields: [bookingId], references: [id])
+  @@map("reviews")
+}

@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { HotelService } from './hotel.service';
+import { HotelReviewsService } from './hotel.reviews';
 import {
   CreateHotelDto,
   UpdateHotelDto,
@@ -27,11 +28,13 @@ import { AuthMiddleware } from '../auth/auth.middleware';
 
 @Controller('hotels')
 export class HotelController {
-  constructor(private readonly hotelService: HotelService) {}
+  constructor(
+    private readonly hotelService: HotelService,
+    private readonly reviewsService: HotelReviewsService,
+  ) {}
 
   // ─────────────────────────────────────
   // GET /hotels
-  // Liste des hôtels avec filtres
   // ─────────────────────────────────────
 
   @Get()
@@ -59,8 +62,56 @@ export class HotelController {
   }
 
   // ─────────────────────────────────────
+  // GET /hotels/search
+  // ─────────────────────────────────────
+
+  @Get('search')
+  @HttpCode(HttpStatus.OK)
+  async search(
+    @Query('q') query: string,
+    @Query('limit') limit: string,
+    @Req() req: Request,
+  ): Promise<HotelResponse[]> {
+    const language = (req as any).language || 'en';
+    return this.hotelService.search(query, language, limit ? parseInt(limit) : 10);
+  }
+
+  // ─────────────────────────────────────
+  // GET /hotels/stats
+  // ─────────────────────────────────────
+
+  @Get('stats')
+  @HttpCode(HttpStatus.OK)
+  async getStats(@Req() req: Request): Promise<any> {
+    AuthMiddleware.requireAdmin(req);
+    return this.hotelService.getStats();
+  }
+
+  // ─────────────────────────────────────
+  // GET /hotels/ai/recommendations
+  // ─────────────────────────────────────
+
+  @Get('ai/recommendations')
+  @HttpCode(HttpStatus.OK)
+  async getAiRecommendations(
+    @Query('destinationId') destinationId: string,
+    @Query('travelStyle') travelStyle: string,
+    @Query('budget') budget: string,
+    @Query('groupType') groupType: string,
+    @Req() req: Request,
+  ): Promise<{ recommendations: string; language: string }> {
+    const language = (req as any).language || 'en';
+    return this.hotelService.getAiRecommendations(
+      destinationId,
+      language,
+      travelStyle,
+      budget,
+      groupType,
+    );
+  }
+
+  // ─────────────────────────────────────
   // GET /hotels/:id
-  // Détail d'un hôtel
   // ─────────────────────────────────────
 
   @Get(':id')
@@ -75,7 +126,6 @@ export class HotelController {
 
   // ─────────────────────────────────────
   // GET /hotels/:id/availability
-  // Vérifier la disponibilité
   // ─────────────────────────────────────
 
   @Get(':id/availability')
@@ -84,12 +134,7 @@ export class HotelController {
     @Param('id') id: string,
     @Query('checkIn') checkIn: string,
     @Query('checkOut') checkOut: string,
-  ): Promise<{
-    available: boolean;
-    pricePerNight: number;
-    totalPrice: number;
-    nights: number;
-  }> {
+  ): Promise<any> {
     return this.hotelService.checkAvailability(
       id,
       new Date(checkIn),
@@ -98,33 +143,37 @@ export class HotelController {
   }
 
   // ─────────────────────────────────────
-  // GET /hotels/ai/recommendations
-  // Recommandations IA personnalisées
+  // GET /hotels/:id/reviews
   // ─────────────────────────────────────
 
-  @Get('ai/recommendations')
+  @Get(':id/reviews')
   @HttpCode(HttpStatus.OK)
-  async getAiRecommendations(
-    @Query('destinationId') destinationId: string,
-    @Query('travelStyle') travelStyle: string,
-    @Query('budget') budget: string,
-    @Query('groupType') groupType: string,
+  async getReviews(
+    @Param('id') id: string,
+    @Query('page') page: string,
+    @Query('limit') limit: string,
     @Req() req: Request,
-  ): Promise<{ recommendations: string; language: string }> {
+  ): Promise<any> {
     const language = (req as any).language || 'en';
-
-    return this.hotelService.getAiRecommendations(
-      destinationId,
+    return this.reviewsService.findByHotel(id, {
+      page: page ? parseInt(page) : 1,
+      limit: limit ? parseInt(limit) : 10,
       language,
-      travelStyle,
-      budget,
-      groupType,
-    );
+    });
+  }
+
+  // ─────────────────────────────────────
+  // GET /hotels/:id/rating
+  // ─────────────────────────────────────
+
+  @Get(':id/rating')
+  @HttpCode(HttpStatus.OK)
+  async getRating(@Param('id') id: string): Promise<any> {
+    return this.reviewsService.getRatingSummary(id);
   }
 
   // ─────────────────────────────────────
   // POST /hotels
-  // Créer un hôtel (partner/admin)
   // ─────────────────────────────────────
 
   @Post()
@@ -132,14 +181,47 @@ export class HotelController {
   async create(
     @Body() dto: CreateHotelDto,
     @Req() req: Request,
-  ): Promise<any> {
+  ): Promise<HotelResponse> {
     AuthMiddleware.requirePartner(req);
     return this.hotelService.create(dto);
   }
 
   // ─────────────────────────────────────
+  // POST /hotels/:id/reviews
+  // ─────────────────────────────────────
+
+  @Post(':id/reviews')
+  @HttpCode(HttpStatus.CREATED)
+  async addReview(
+    @Param('id') hotelId: string,
+    @Body() body: any,
+    @Req() req: Request,
+  ): Promise<any> {
+    AuthMiddleware.requireAuth(req);
+    const userId = req.user!.id;
+    const language = (req as any).language || 'en';
+
+    const review = await this.reviewsService.create({
+      userId,
+      hotelId,
+      bookingId: body.bookingId,
+      rating: body.rating,
+      comment: body.comment,
+      originalLanguage: language,
+      cleanliness: body.cleanliness,
+      service: body.service,
+      location: body.location,
+      value: body.value,
+    });
+
+    // Mettre à jour le rating de l'hôtel
+    await this.hotelService.updateRating(hotelId);
+
+    return review;
+  }
+
+  // ─────────────────────────────────────
   // PUT /hotels/:id
-  // Mettre à jour un hôtel (partner/admin)
   // ─────────────────────────────────────
 
   @Put(':id')
@@ -148,14 +230,29 @@ export class HotelController {
     @Param('id') id: string,
     @Body() dto: UpdateHotelDto,
     @Req() req: Request,
-  ): Promise<any> {
+  ): Promise<HotelResponse> {
     AuthMiddleware.requirePartner(req);
-    return this.hotelService.update(id, dto);
+    const language = (req as any).language || 'en';
+    return this.hotelService.update(id, dto, language);
+  }
+
+  // ─────────────────────────────────────
+  // PUT /hotels/:id/verify
+  // ─────────────────────────────────────
+
+  @Put(':id/verify')
+  @HttpCode(HttpStatus.OK)
+  async verify(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<{ verified: boolean }> {
+    AuthMiddleware.requireAdmin(req);
+    await this.hotelService.update(id, { isVerified: true } as any);
+    return { verified: true };
   }
 
   // ─────────────────────────────────────
   // DELETE /hotels/:id
-  // Supprimer un hôtel (admin)
   // ─────────────────────────────────────
 
   @Delete(':id')
