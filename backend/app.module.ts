@@ -27,7 +27,7 @@ import { AiService } from './modules/ai/ai.service';
   ],
 })
 export class AppModule implements NestModule {
-  configure(consumer: MiddlewareConsumer) {url: process.env.REDIS_URL || 'redis://:wanderix_redis@localhost:6379',
+  configure(consumer: MiddlewareConsumer) {url: process.env.REDIS_URL || 
     consumer
       .apply(LocaleMiddleware, AuthMiddleware)
       .forRoutes('*');
