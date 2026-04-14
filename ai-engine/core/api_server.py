@@ -394,3 +394,61 @@ async def search_destination(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+        # ─────────────────────────────────────────
+# UNIVERSAL LANGUAGE ROUTES (50+ langues)
+# ─────────────────────────────────────────
+
+from core.universal_language import UniversalLanguageService
+
+universal_lang = UniversalLanguageService()
+
+class TranslateUniversalReq(PydanticBaseModel):
+    text: str
+    target_language: str
+    context: str = None
+    source_language: str = None
+
+class DetectLanguageReq(PydanticBaseModel):
+    text: str
+
+class RespondInLanguageReq(PydanticBaseModel):
+    user_message: str
+    system_prompt: str = "You are Wanderix AI travel assistant."
+    detected_language: str = None
+
+@app.get("/languages")
+async def get_languages(_: str = Depends(verify_internal_key)):
+    return {"languages": universal_lang.get_supported_languages(), "total": len(universal_lang.get_supported_languages())}
+
+@app.post("/language/detect")
+async def detect_language(req: DetectLanguageReq, _: str = Depends(verify_internal_key)):
+    try:
+        result = universal_lang.detect_language(req.text)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/language/translate")
+async def translate_universal(req: TranslateUniversalReq, _: str = Depends(verify_internal_key)):
+    try:
+        result = universal_lang.translate(
+            text=req.text,
+            target_language=req.target_language,
+            context=req.context,
+            source_language=req.source_language,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/language/respond")
+async def respond_in_language(req: RespondInLanguageReq, _: str = Depends(verify_internal_key)):
+    try:
+        result = universal_lang.respond_in_language(
+            user_message=req.user_message,
+            system_prompt=req.system_prompt,
+            detected_language=req.detected_language,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
