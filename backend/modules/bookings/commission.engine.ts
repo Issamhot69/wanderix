@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { BookingType } from './booking.model';
-
+// import { BookingType } from './booking.model';
+type BookingType = 'hotel' | 'flight' | 'guide' | 'activity';
 // ─────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────

@@ -1,18 +1,44 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
-import {
-  BookingModel,
-  BookingResponse,
-  CreateBookingDto,
-  UpdateBookingDto,
-  BookingFilterDto,
-  BookingStatus,
-} from './booking.model';
-import { CommissionEngine } from './commission.engine';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Pool } from 'pg';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// ─────────────────────────────────────────
+// DTOs
+// ─────────────────────────────────────────
+
+export interface CreateBookingDto {
+  userId: string;
+  hotelId: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children?: number;
+  rooms?: number;
+  specialRequests?: string;
+  currency?: string;
+}
+
+export interface BookingResponse {
+  id: string;
+  userId: string;
+  hotelId: string;
+  status: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children: number;
+  rooms: number;
+  nights: number;
+  pricePerNight: number;
+  baseAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  currency: string;
+  specialRequests: string;
+  confirmationCode: string;
+  createdAt: string;
+}
 
 // ─────────────────────────────────────────
 // Service
@@ -22,53 +48,91 @@ import { CommissionEngine } from './commission.engine';
 export class BookingService {
   private readonly logger = new Logger(BookingService.name);
 
-  constructor(
-    private readonly commissionEngine: CommissionEngine,
-  ) {}
-
   // ─────────────────────────────────────
   // Créer une réservation
   // ─────────────────────────────────────
 
   async create(dto: CreateBookingDto): Promise<BookingResponse> {
     try {
-      // 1. Calculer le prix de base
-      const baseAmount = await this.calculateBaseAmount(dto);
+      // 1. Récupérer l'hôtel
+      const hotelResult = await pool.query(
+        'SELECT * FROM hotels WHERE id = $1 AND is_active = true',
+        [dto.hotelId]
+      );
 
-      // 2. Calculer la commission Wanderix
-      const { commissionRate, commissionAmount, totalAmount } =
-        await this.commissionEngine.calculate({
-          bookingType: dto.bookingType,
+      if (!hotelResult.rows[0]) {
+        throw new NotFoundException(`Hotel ${dto.hotelId} not found`);
+      }
+
+      const hotel = hotelResult.rows[0];
+
+      // 2. Calculer les nuits et le prix
+      const checkIn = new Date(dto.checkIn);
+      const checkOut = new Date(dto.checkOut);
+      const nights = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
+
+      if (nights <= 0) {
+        throw new BadRequestException('Check-out must be after check-in');
+      }
+
+      const rooms = dto.rooms || 1;
+      const pricePerNight = Number(hotel.price_per_night);
+      const baseAmount = pricePerNight * nights * rooms;
+      const taxAmount = Math.round(baseAmount * 0.1 * 100) / 100;
+      const totalAmount = Math.round((baseAmount + taxAmount) * 100) / 100;
+      const currency = dto.currency || hotel.currency || 'USD';
+
+      // 3. Générer code de confirmation
+      const confirmationCode = `WDX-${Date.now().toString(36).toUpperCase()}`;
+
+      // 4. Créer en DB
+      const result = await pool.query(
+        `INSERT INTO bookings (
+          id, user_id, hotel_id, status,
+          check_in, check_out,
+          base_amount, total_amount, currency,
+          created_at, updated_at
+        ) VALUES (
+          gen_random_uuid(), $1, $2, 'pending',
+          $3, $4,
+          $5, $6, $7,
+          NOW(), NOW()
+        ) RETURNING *`,
+        [
+          dto.userId,
+          dto.hotelId,
+          dto.checkIn,
+          dto.checkOut,
           baseAmount,
-          currency: dto.currency || 'USD',
-        });
+          totalAmount,
+          currency,
+        ]
+      );
 
-      // 3. Créer la réservation en DB
-      const booking: BookingModel = {
-        id: crypto.randomUUID(),
-        userId: dto.userId,
-        tripId: dto.tripId,
-        bookingType: dto.bookingType,
-        hotelId: dto.hotelId,
-        guideId: dto.guideId,
-        flightRef: dto.flightRef,
-        checkIn: dto.checkIn,
-        checkOut: dto.checkOut,
-        bookingDate: new Date(),
-        baseAmount,
-        commissionRate,
-        commissionAmount,
-        totalAmount,
-        currency: dto.currency || 'USD',
-        status: 'pending',
-        language: dto.language || 'en',
-        notes: dto.notes,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+      const booking = result.rows[0];
 
       this.logger.log(`Booking created: ${booking.id}`);
-      return this.toResponse(booking);
+
+      return {
+        id: booking.id,
+        userId: booking.user_id,
+        hotelId: booking.hotel_id,
+        status: booking.status,
+        checkIn: booking.check_in,
+        checkOut: booking.check_out,
+        adults: dto.adults,
+        children: dto.children || 0,
+        rooms,
+        nights,
+        pricePerNight,
+        baseAmount,
+        taxAmount,
+        totalAmount,
+        currency,
+        specialRequests: dto.specialRequests || '',
+        confirmationCode,
+        createdAt: booking.created_at,
+      };
 
     } catch (error) {
       this.logger.error(`create booking failed: ${error.message}`);
@@ -77,24 +141,24 @@ export class BookingService {
   }
 
   // ─────────────────────────────────────
-  // Lister les réservations
+  // Lister les réservations d'un user
   // ─────────────────────────────────────
 
-  async findAll(
-    filter: BookingFilterDto,
-  ): Promise<{ bookings: BookingResponse[]; total: number }> {
+  async findByUser(userId: string): Promise<BookingResponse[]> {
     try {
-      // TODO: requête DB avec filtres
-      const bookings: BookingModel[] = [];
-      const total = 0;
+      const result = await pool.query(
+        `SELECT b.*, h.name as hotel_name, h.cover_image_url
+         FROM bookings b
+         LEFT JOIN hotels h ON b.hotel_id = h.id
+         WHERE b.user_id = $1
+         ORDER BY b.created_at DESC`,
+        [userId]
+      );
 
-      return {
-        bookings: bookings.map(this.toResponse),
-        total,
-      };
+      return result.rows.map(this.mapRow);
 
     } catch (error) {
-      this.logger.error(`findAll bookings failed: ${error.message}`);
+      this.logger.error(`findByUser failed: ${error.message}`);
       throw error;
     }
   }
@@ -105,41 +169,22 @@ export class BookingService {
 
   async findById(id: string): Promise<BookingResponse> {
     try {
-      // TODO: requête DB
-      const booking: BookingModel | null = null;
+      const result = await pool.query(
+        `SELECT b.*, h.name as hotel_name, h.cover_image_url
+         FROM bookings b
+         LEFT JOIN hotels h ON b.hotel_id = h.id
+         WHERE b.id = $1`,
+        [id]
+      );
 
-      if (!booking) {
+      if (!result.rows[0]) {
         throw new NotFoundException(`Booking ${id} not found`);
       }
 
-      return this.toResponse(booking);
+      return this.mapRow(result.rows[0]);
 
     } catch (error) {
-      this.logger.error(`findById booking failed: ${error.message}`);
-      throw error;
-    }
-  }
-
-  // ─────────────────────────────────────
-  // Confirmer une réservation
-  // ─────────────────────────────────────
-
-  async confirm(id: string): Promise<BookingResponse> {
-    try {
-      const booking = await this.findById(id);
-
-      if (booking.status !== 'pending') {
-        throw new BadRequestException(
-          `Booking ${id} cannot be confirmed — status: ${booking.status}`,
-        );
-      }
-
-      // TODO: update DB status → confirmed
-      this.logger.log(`Booking confirmed: ${id}`);
-      return { ...booking, status: 'confirmed' };
-
-    } catch (error) {
-      this.logger.error(`confirm booking failed: ${error.message}`);
+      this.logger.error(`findById failed: ${error.message}`);
       throw error;
     }
   }
@@ -152,16 +197,22 @@ export class BookingService {
     try {
       const booking = await this.findById(id);
 
-      if (['completed', 'cancelled', 'refunded'].includes(booking.status)) {
-        throw new BadRequestException(
-          `Booking ${id} cannot be cancelled — status: ${booking.status}`,
-        );
+      if (booking.userId !== userId) {
+        throw new BadRequestException('You can only cancel your own bookings');
       }
 
-      // TODO: update DB status → cancelled
-      // TODO: déclencher le remboursement si payment existe
-      this.logger.log(`Booking cancelled: ${id} by user ${userId}`);
-      return { ...booking, status: 'cancelled' };
+      if (booking.status === 'cancelled') {
+        throw new BadRequestException('Booking already cancelled');
+      }
+
+      const result = await pool.query(
+        `UPDATE bookings SET status = 'cancelled', updated_at = NOW()
+         WHERE id = $1 RETURNING *`,
+        [id]
+      );
+
+      this.logger.log(`Booking cancelled: ${id}`);
+      return this.mapRow(result.rows[0]);
 
     } catch (error) {
       this.logger.error(`cancel booking failed: ${error.message}`);
@@ -170,54 +221,47 @@ export class BookingService {
   }
 
   // ─────────────────────────────────────
-  // Compléter une réservation
+  // Confirmer une réservation
   // ─────────────────────────────────────
 
-  async complete(id: string): Promise<BookingResponse> {
+  async confirm(id: string): Promise<BookingResponse> {
     try {
-      const booking = await this.findById(id);
+      const result = await pool.query(
+        `UPDATE bookings SET status = 'confirmed', updated_at = NOW()
+         WHERE id = $1 RETURNING *`,
+        [id]
+      );
 
-      if (booking.status !== 'confirmed') {
-        throw new BadRequestException(
-          `Booking ${id} cannot be completed — status: ${booking.status}`,
-        );
+      if (!result.rows[0]) {
+        throw new NotFoundException(`Booking ${id} not found`);
       }
 
-      // TODO: update DB status → completed
-      // TODO: déclencher le payout vers le partenaire
-      this.logger.log(`Booking completed: ${id}`);
-      return { ...booking, status: 'completed' };
+      this.logger.log(`Booking confirmed: ${id}`);
+      return this.mapRow(result.rows[0]);
 
     } catch (error) {
-      this.logger.error(`complete booking failed: ${error.message}`);
+      this.logger.error(`confirm booking failed: ${error.message}`);
       throw error;
     }
   }
 
   // ─────────────────────────────────────
-  // Statistiques (admin)
+  // Stats (admin)
   // ─────────────────────────────────────
 
-  async getStats(): Promise<{
-    total: number;
-    pending: number;
-    confirmed: number;
-    cancelled: number;
-    completed: number;
-    totalRevenue: number;
-    totalCommission: number;
-  }> {
+  async getStats(): Promise<any> {
     try {
-      // TODO: agrégation DB
-      return {
-        total: 0,
-        pending: 0,
-        confirmed: 0,
-        cancelled: 0,
-        completed: 0,
-        totalRevenue: 0,
-        totalCommission: 0,
-      };
+      const result = await pool.query(`
+        SELECT
+          COUNT(*) as total,
+          COUNT(CASE WHEN status = 'confirmed' THEN 1 END) as confirmed,
+          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
+          COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled,
+          COALESCE(SUM(CASE WHEN status = 'confirmed' THEN total_amount END), 0) as revenue
+        FROM bookings
+      `);
+
+      return result.rows[0];
 
     } catch (error) {
       this.logger.error(`getStats failed: ${error.message}`);
@@ -226,52 +270,29 @@ export class BookingService {
   }
 
   // ─────────────────────────────────────
-  // Helpers privés
+  // Helper
   // ─────────────────────────────────────
 
-  private async calculateBaseAmount(
-    dto: CreateBookingDto,
-  ): Promise<number> {
-    if (dto.bookingType === 'hotel' && dto.hotelId && dto.checkIn && dto.checkOut) {
-      const nights = Math.ceil(
-        (new Date(dto.checkOut).getTime() - new Date(dto.checkIn).getTime()) /
-        (1000 * 60 * 60 * 24),
-      );
-      // TODO: récupérer le prix/nuit depuis la DB
-      const pricePerNight = 100;
-      return pricePerNight * nights;
-    }
-
-    if (dto.bookingType === 'guide' && dto.guideId) {
-      // TODO: récupérer le prix depuis la DB
-      return 150;
-    }
-
-    if (dto.bookingType === 'flight' && dto.flightRef) {
-      // TODO: récupérer le prix depuis Amadeus
-      return 300;
-    }
-
-    return 0;
-  }
-
-  private toResponse(booking: BookingModel): BookingResponse {
+  private mapRow(row: any): BookingResponse {
     return {
-      id: booking.id,
-      bookingType: booking.bookingType,
-      status: booking.status,
-      hotelId: booking.hotelId,
-      guideId: booking.guideId,
-      flightRef: booking.flightRef,
-      checkIn: booking.checkIn,
-      checkOut: booking.checkOut,
-      baseAmount: booking.baseAmount,
-      commissionAmount: booking.commissionAmount,
-      totalAmount: booking.totalAmount,
-      currency: booking.currency,
-      language: booking.language,
-      notes: booking.notes,
-      bookingDate: booking.bookingDate,
+      id: row.id,
+      userId: row.user_id,
+      hotelId: row.hotel_id,
+      status: row.status,
+      checkIn: row.check_in,
+      checkOut: row.check_out,
+      adults: row.adults || 1,
+      children: row.children || 0,
+      rooms: row.rooms || 1,
+      nights: 0,
+      pricePerNight: Number(row.base_amount),
+      baseAmount: Number(row.base_amount),
+      taxAmount: 0,
+      totalAmount: Number(row.total_amount),
+      currency: row.currency,
+      specialRequests: row.special_requests || '',
+      confirmationCode: row.confirmation_code || '',
+      createdAt: row.created_at,
     };
   }
 }

@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Delete,
   Body,
   Param,
   Query,
@@ -11,97 +12,66 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { BookingService } from './booking.service';
-import {
-  CreateBookingDto,
-  BookingResponse,
-  BookingFilterDto,
-} from './booking.model';
+import { BookingService, CreateBookingDto } from './booking.service';
 import { AuthMiddleware } from '../auth/auth.middleware';
-
-// ─────────────────────────────────────────
-// Controller
-// ─────────────────────────────────────────
 
 @Controller('bookings')
 export class BookingController {
   constructor(private readonly bookingService: BookingService) {}
 
   // ─────────────────────────────────────
-  // POST /bookings
-  // Créer une réservation
+  // POST /bookings — Créer une réservation
   // ─────────────────────────────────────
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(
-    @Body() dto: CreateBookingDto,
+    @Body() body: any,
     @Req() req: Request,
-  ): Promise<BookingResponse> {
+  ) {
     AuthMiddleware.requireAuth(req);
-
-    const language = (req as any).language || 'en';
     const userId = req.user!.id;
 
-    return this.bookingService.create({
-      ...dto,
+    const dto: CreateBookingDto = {
       userId,
-      language,
-    });
-  }
-
-  // ─────────────────────────────────────
-  // GET /bookings
-  // Lister les réservations
-  // ─────────────────────────────────────
-
-  @Get()
-  @HttpCode(HttpStatus.OK)
-  async findAll(
-    @Query() query: any,
-    @Req() req: Request,
-  ): Promise<{ bookings: BookingResponse[]; total: number }> {
-    AuthMiddleware.requireAuth(req);
-
-    const isAdmin = req.user!.role === 'admin';
-
-    const filter: BookingFilterDto = {
-      // Admin voit tout, tourist voit seulement les siennes
-      userId: isAdmin ? query.userId : req.user!.id,
-      status: query.status,
-      bookingType: query.bookingType,
-      fromDate: query.fromDate ? new Date(query.fromDate) : undefined,
-      toDate: query.toDate ? new Date(query.toDate) : undefined,
-      page: query.page ? parseInt(query.page) : 1,
-      limit: query.limit ? parseInt(query.limit) : 20,
+      hotelId: body.hotelId,
+      checkIn: body.checkIn,
+      checkOut: body.checkOut,
+      adults: body.adults || 2,
+      children: body.children || 0,
+      rooms: body.rooms || 1,
+      specialRequests: body.specialRequests,
+      currency: body.currency || 'USD',
     };
 
-    return this.bookingService.findAll(filter);
+    return this.bookingService.create(dto);
   }
 
   // ─────────────────────────────────────
-  // GET /bookings/stats
-  // Statistiques (admin)
+  // GET /bookings/me — Mes réservations
+  // ─────────────────────────────────────
+
+  @Get('me')
+  @HttpCode(HttpStatus.OK)
+  async getMyBookings(@Req() req: Request) {
+    AuthMiddleware.requireAuth(req);
+    const userId = req.user!.id;
+    return this.bookingService.findByUser(userId);
+  }
+
+  // ─────────────────────────────────────
+  // GET /bookings/stats — Stats admin
   // ─────────────────────────────────────
 
   @Get('stats')
   @HttpCode(HttpStatus.OK)
-  async getStats(@Req() req: Request): Promise<{
-    total: number;
-    pending: number;
-    confirmed: number;
-    cancelled: number;
-    completed: number;
-    totalRevenue: number;
-    totalCommission: number;
-  }> {
+  async getStats(@Req() req: Request) {
     AuthMiddleware.requireAdmin(req);
     return this.bookingService.getStats();
   }
 
   // ─────────────────────────────────────
-  // GET /bookings/:id
-  // Détail d'une réservation
+  // GET /bookings/:id — Détails
   // ─────────────────────────────────────
 
   @Get(':id')
@@ -109,14 +79,13 @@ export class BookingController {
   async findById(
     @Param('id') id: string,
     @Req() req: Request,
-  ): Promise<BookingResponse> {
+  ) {
     AuthMiddleware.requireAuth(req);
     return this.bookingService.findById(id);
   }
 
   // ─────────────────────────────────────
-  // PUT /bookings/:id/confirm
-  // Confirmer une réservation (partner/admin)
+  // PUT /bookings/:id/confirm — Confirmer
   // ─────────────────────────────────────
 
   @Put(':id/confirm')
@@ -124,14 +93,13 @@ export class BookingController {
   async confirm(
     @Param('id') id: string,
     @Req() req: Request,
-  ): Promise<BookingResponse> {
-    AuthMiddleware.requirePartner(req);
+  ) {
+    AuthMiddleware.requireAdmin(req);
     return this.bookingService.confirm(id);
   }
 
   // ─────────────────────────────────────
-  // PUT /bookings/:id/cancel
-  // Annuler une réservation
+  // PUT /bookings/:id/cancel — Annuler
   // ─────────────────────────────────────
 
   @Put(':id/cancel')
@@ -139,24 +107,9 @@ export class BookingController {
   async cancel(
     @Param('id') id: string,
     @Req() req: Request,
-  ): Promise<BookingResponse> {
+  ) {
     AuthMiddleware.requireAuth(req);
     const userId = req.user!.id;
     return this.bookingService.cancel(id, userId);
-  }
-
-  // ─────────────────────────────────────
-  // PUT /bookings/:id/complete
-  // Compléter une réservation (admin)
-  // ─────────────────────────────────────
-
-  @Put(':id/complete')
-  @HttpCode(HttpStatus.OK)
-  async complete(
-    @Param('id') id: string,
-    @Req() req: Request,
-  ): Promise<BookingResponse> {
-    AuthMiddleware.requireAdmin(req);
-    return this.bookingService.complete(id);
   }
 }
