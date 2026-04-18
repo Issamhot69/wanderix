@@ -14,6 +14,7 @@ from core.did_avatar import DIDAvatarService
 from core.voice_ai import VoiceAIService
 from core.vision_ai import VisionAIService
 from core.map_service import MapService
+from core.flights_search import FlightsSearchService
 import anthropic
 
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +34,7 @@ did_service = DIDAvatarService()
 voice_service = VoiceAIService()
 vision_service = VisionAIService()
 map_service = MapService()
-
+flights_service = FlightsSearchService()
 def verify_internal_key(x_internal_key: str = Header(...)):
     expected = os.environ.get("INTERNAL_API_KEY")
     if x_internal_key != expected:
@@ -332,5 +333,66 @@ async def get_map_data(destination: str, checkin: str, checkout: str, language: 
 async def get_destinations(_: str = Depends(verify_internal_key)):
     try:
         return {"destinations": map_service.get_all_destinations(), "total": len(map_service.get_all_destinations())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/flights/search")
+async def search_flights(
+    origin: str,
+    destination: str,
+    date: str,
+    return_date: Optional[str] = None,
+    adults: int = 1,
+    cabin_class: str = "economy",
+    currency: str = "USD",
+    language: str = "en",
+    _: str = Depends(verify_internal_key),
+):
+    try:
+        return await flights_service.search_flights(
+            origin=origin,
+            destination=destination,
+            date=date,
+            return_date=return_date,
+            adults=adults,
+            cabin_class=cabin_class,
+            currency=currency,
+            language=language,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        returts(
+            origin=origin,
+            destination=destination,
+            date=date,
+            return_date=return_date,
+            adults=adults,
+            cabin_class=cabin_class,
+            currency=currency,
+            language=language,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/flights/airports")
+async def get_airports(_: str = Depends(verify_internal_key)):
+    return {"airports": flights_service.get_airports(), "total": len(flights_service.get_airports())}
+
+@app.get("/flights/calendar")
+async def get_price_calendar(
+    origin: str,
+    destination: str,
+    year: int,
+    month: int,
+    currency: str = "USD",
+    _: str = Depends(verify_internal_key),
+):
+    try:
+        return await flights_service.get_price_calendar(
+            origin=origin,
+            destination=destination,
+            year=year,
+            month=month,
+            currency=currency,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
