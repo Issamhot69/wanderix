@@ -150,7 +150,7 @@ async def map_page():
         return f.read()
 @app.get("/landing", response_class=HTMLResponse)
 async def landing_page():
-    landing_path = os.path.join(os.path.dirname(__file__), "..", "landing", "index.html")
+    landing_path = os.path.join(os.path.dirname(__file__), "static", "landing.html")
     with open(landing_path, "r", encoding="utf-8") as f:
         return f.read()
 @app.post("/ai/itinerary")
